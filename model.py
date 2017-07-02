@@ -33,6 +33,25 @@ def rgb2yuv(image):
     """
     return cv2.cvtColor(image, cv2.COLOR_RGB2YUV)
 
+def choose_image(center, left, right, steering_angle):
+    """
+    Randomly choose an image from the center, left or right, and adjust
+    the steering angle.
+    """
+    choice = np.random.choice(3)
+    if choice == 0:
+        return load_image(left), steering_angle + 0.3
+    elif choice == 1:
+        return load_image(right), steering_angle - 0.3
+    return load_image(center), steering_angle
+
+def augment(center, left, right, steering_angle):
+    """
+    Generate an augmented image with associated steering commands
+    """
+    image, steering_angle = choose_image(data_dir, center, left, right, steering_angle)
+    return image, steering_angle
+
 def preprocess(image):
     """
     Combine all preprocess functions into one
@@ -54,7 +73,7 @@ def load_data(args):
 
     return X_train, X_valid, y_train, y_valid
 
-def batch_generator(image_paths, steering_angles, batch_size):
+def batch_generator(image_paths, steering_angles, batch_size, augment_data=False):
     """
     Generate batches for training/validation
     """
@@ -110,7 +129,7 @@ def train_model(model, args, X_train, X_valid, y_train, y_valid):
     model.compile(loss='mean_squared_error', optimizer=Adam(lr=args.learning_rate))
 
     model.fit_generator(
-        batch_generator(X_train, y_train, args.batch_size),
+        batch_generator(X_train, y_train, args.batch_size, augment_data=True),
         args.samples_per_epoch,
         args.nb_epoch,
         max_q_size=1,
