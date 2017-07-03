@@ -37,16 +37,12 @@ def choose_image(center, left, right, steering_angle):
     """
     Randomly choose an image from the center, left or right, and adjust
     the steering angle.
-    Use a bias towards the side images if the steering angle is 0.
     """
-    if (steering_angle == 0):
-        choice = np.random.choice(5)
-    else:
-        choice = np.random.choice(3)
+    choice = np.random.choice(3)
 
-    if (choice == 1 or choice == 3):
+    if (choice == 1):
         return load_image(left), steering_angle + 0.3
-    elif (choice == 2 or choice == 4):
+    elif (choice == 2):
         return load_image(right), steering_angle - 0.3
     return load_image(center), steering_angle
 
@@ -116,7 +112,7 @@ def build_model(args):
     model.add(Conv2D(48, 5, 5, activation='elu', subsample=(2, 2)))
     model.add(Conv2D(64, 3, 3, activation='elu'))
     model.add(Conv2D(64, 3, 3, activation='elu'))
-    model.add(Dropout(0.5))
+#    model.add(Dropout(0.5))
     model.add(Flatten())
     model.add(Dense(100, activation='elu'))
     model.add(Dense(50, activation='elu'))
