@@ -12,7 +12,7 @@ import matplotlib.image as mpimg
 
 np.random.seed(0)
 
-IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 64, 64, 3
+IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 80, 160, 3
 INPUT_SHAPE = (IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS)
 
 def load_image(image_file):
@@ -37,19 +37,31 @@ def choose_image(center, left, right, steering_angle):
     """
     Randomly choose an image from the center, left or right, and adjust
     the steering angle.
+    Use a bias towards the side images if the steering angle is 0.
     """
-    choice = np.random.choice(3)
-    if choice == 0:
+    if (steering_angle == 0):
+        choice = np.random.choice(5)
+    else:
+        choice = np.random.choice(3)
+
+    if (choice == 1 or choice == 3):
         return load_image(left), steering_angle + 0.3
-    elif choice == 1:
+    elif (choice == 2 or choice == 4):
         return load_image(right), steering_angle - 0.3
     return load_image(center), steering_angle
+
+def random_flip(image, steering_angle):
+    choice = np.random.choice(2)
+    if choice == 0:
+        return cv2.flip(image,1), -steering_angle
+    return image, steering_angle
 
 def augment(center, left, right, steering_angle):
     """
     Generate an augmented image with associated steering commands
     """
-    image, steering_angle = choose_image(data_dir, center, left, right, steering_angle)
+    image, steering_angle = choose_image(center, left, right, steering_angle)
+    image, steering_angle = random_flip(image, steering_angle)
     return image, steering_angle
 
 def preprocess(image):
@@ -84,7 +96,7 @@ def batch_generator(image_paths, steering_angles, batch_size, augment_data=False
         for index in np.random.permutation(image_paths.shape[0]):
             center, left, right = image_paths[index]
             steering_angle = steering_angles[index]
-            image = load_image(center)
+            image, steering_angle = augment(center, left, right, steering_angle)
             # add the image and steering angle to the batch
             images[i] = preprocess(image)
             steers[i] = steering_angle
@@ -104,6 +116,7 @@ def build_model(args):
     model.add(Conv2D(48, 5, 5, activation='elu', subsample=(2, 2)))
     model.add(Conv2D(64, 3, 3, activation='elu'))
     model.add(Conv2D(64, 3, 3, activation='elu'))
+    model.add(Dropout(0.5))
     model.add(Flatten())
     model.add(Dense(100, activation='elu'))
     model.add(Dense(50, activation='elu'))
@@ -157,9 +170,9 @@ def main():
     parser = argparse.ArgumentParser(description='Behavioral Cloning Training Program')
     parser.add_argument('-d', help='data directory',        dest='data_dir',          type=str)
     parser.add_argument('-t', help='test size fraction',    dest='test_size',         type=float, default=0.2)
-    parser.add_argument('-n', help='number of epochs',      dest='nb_epoch',          type=int,   default=10)
+    parser.add_argument('-n', help='number of epochs',      dest='nb_epoch',          type=int,   default=20)
     parser.add_argument('-s', help='samples per epoch',     dest='samples_per_epoch', type=int,   default=20000)
-    parser.add_argument('-b', help='batch size',            dest='batch_size',        type=int,   default=40)
+    parser.add_argument('-b', help='batch size',            dest='batch_size',        type=int,   default=400)
     parser.add_argument('-o', help='save best models only', dest='save_best_only',    type=s2b,   default='true')
     parser.add_argument('-l', help='learning rate',         dest='learning_rate',     type=float, default=1.0e-4)
     args = parser.parse_args()
