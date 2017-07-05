@@ -12,7 +12,7 @@ import matplotlib.image as mpimg
 
 np.random.seed(0)
 
-IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 80, 160, 3
+IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 160, 320, 3
 INPUT_SHAPE = (IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS)
 
 def load_image(image_file):
@@ -64,7 +64,7 @@ def preprocess(image):
     """
     Combine all preprocess functions into one
     """
-    image = resize(image)
+#    image = resize(image)
     image = rgb2yuv(image)
     return image
 
@@ -109,6 +109,7 @@ def build_model(args):
     model.add(Lambda(lambda x: x/127.5-1.0, input_shape=INPUT_SHAPE))
     model.add(Conv2D(24, 5, 5, activation='elu', subsample=(2, 2)))
     model.add(Conv2D(36, 5, 5, activation='elu', subsample=(2, 2)))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
     model.add(Conv2D(48, 5, 5, activation='elu', subsample=(2, 2)))
     model.add(Conv2D(64, 3, 3, activation='elu'))
     model.add(Conv2D(64, 3, 3, activation='elu'))
