@@ -46,9 +46,9 @@ class SimplePIController:
 
 
 controller = SimplePIController(0.1, 0.002)
-set_speed = 9
-controller.set_desired(set_speed)
 
+MIN_SPEED = 9
+MAX_SPEED = 30
 
 @sio.on('telemetry')
 def telemetry(sid, data):
@@ -64,11 +64,18 @@ def telemetry(sid, data):
         image = Image.open(BytesIO(base64.b64decode(imgString)))
         image_array = np.asarray(image)
         image_processed = preprocess(image_array)
-        steering_angle = float(model.predict(image_processed[None, :, :, :], batch_size=1))
+        res = model.predict(image_processed[None, :, :, :], batch_size=1)
+        steering_angle = float(res[0][0])
+        new_speed = float(res[0][1])
+        if (new_speed > MAX_SPEED):
+            new_speed=MAX_SPEED
+        elif (new_speed < MIN_SPEED):
+            new_speed=MIN_SPEED
 
+        controller.set_desired(new_speed)
         throttle = controller.update(float(speed))
 
-        print(steering_angle, throttle)
+        print(steering_angle, new_speed, throttle)
         send_control(steering_angle, throttle)
 
         # save frame
@@ -123,6 +130,7 @@ if __name__ == '__main__':
               ', but the model was built using ', model_version)
 
     model = load_model(args.model)
+    model.summary()
 
     if args.image_folder != '':
         print("Creating image folder at {}".format(args.image_folder))
