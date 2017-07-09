@@ -48,7 +48,7 @@ class SimplePIController:
 controller = SimplePIController(0.1, 0.002)
 
 MIN_SPEED = 9
-MAX_SPEED = 25
+MAX_SPEED = 30
 
 @sio.on('telemetry')
 def telemetry(sid, data):
@@ -66,7 +66,7 @@ def telemetry(sid, data):
         image_processed = preprocess(image_array)
         res = model.predict(image_processed[None, :, :, :], batch_size=1)
         steering_angle = float(res[0][0])
-        new_speed = float(res[1][0])*SPEED_SCALING_FACTOR*0.7
+        new_speed = float(res[1][0])*SPEED_SCALING_FACTOR
         if (new_speed > MAX_SPEED):
             new_speed=MAX_SPEED
         elif (new_speed < MIN_SPEED):
