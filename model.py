@@ -15,6 +15,9 @@ np.random.seed(0)
 IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 160, 320, 3
 INPUT_SHAPE = (IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS)
 
+# This should be close to tthe maximum speed
+SPEED_SCALING_FACTOR = 30
+
 def load_image(image_file):
     """
     Load RGB images from a file
@@ -83,12 +86,13 @@ def load_data(args):
 
     return X_train, X_valid, y_train, y_valid
 
-def batch_generator(image_paths, all_outputs, batch_size, augment_data=False, output_speed=False):
+def batch_generator(image_paths, all_outputs, batch_size, augment_data=False):
     """
     Generate batches for training/validation
     """
     images = np.empty([batch_size, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS])
-    outputs = np.empty([batch_size, 1])
+    steering_outputs = np.empty([batch_size, 1])
+    speed_outputs = np.empty([batch_size, 1])
     while True:
         i = 0
         for index in np.random.permutation(image_paths.shape[0]):
@@ -100,16 +104,14 @@ def batch_generator(image_paths, all_outputs, batch_size, augment_data=False, ou
                 image = load_image(center)
             # add the image and steering angle to the batch
             images[i] = preprocess(image)
-            if (output_speed):
-                outputs[i] = speed
-            else:
-                outputs[i] = steering_angle
+            steering_outputs[i] = steering_angle
+            speed_outputs[i] = speed/SPEED_SCALING_FACTOR
             i += 1
             if i == batch_size:
                 break
-        yield images, outputs
+        yield images, [steering_outputs, speed_outputs]
 
-def build_models(args):
+def build_model(args):
     """
     NVIDIA model: https://devblogs.nvidia.com/parallelforall/deep-learning-self-driving-cars/
     """
@@ -123,164 +125,46 @@ def build_models(args):
     x = Conv2D(64, 3, 3, activation='elu')(x)
     x = Flatten()(x)
 
-    x1 = Dense(100, activation='elu')(x)
-    x1 = Dense(50, activation='elu')(x1)
-    x1 = Dense(10, activation='elu')(x1)
-    x1 = Dense(1)(x1)
-    steering_model = Model(inputs, x1)
+    x1 = Dense(100, activation='elu', name='steering_1')(x)
+    x1 = Dense(50, activation='elu', name='steering_2')(x1)
+    x1 = Dense(10, activation='elu', name='steering_3')(x1)
+    steering_output = Dense(1, name='steering_output')(x1)
 
-    x2 = Dense(50, activation='elu')(x)
-    x2 = Dense(10, activation='elu')(x2)
-    x2 = Dense(1)(x2)
-    x2 = Lambda(lambda n: n*30)(x2)
-    speed_model = Model(inputs, x2)
+    x2 = Dense(50, activation='elu', name='speed_1')(x)
+    x2 = Dense(10, activation='elu', name='speed_2')(x2)
+    speed_output = Dense(1, name='speed_output')(x2)
 
-    merged = merge([x1, x2], mode='concat', concat_axis=1)
-    merged_model = Model(inputs, merged)
-    merged_model.summary()
+    model = Model(inputs, [steering_output, speed_output])
+    model.summary()
 
-    return steering_model, speed_model, merged_model
+    return model
 
-class ModelCheckpointOverrideModel(ModelCheckpoint):
-    def __init__(
-            self, model, filepath, monitor='val_loss', verbose=0,
-            save_best_only=False, save_weights_only=False,
-            mode='auto', period=1):
-        super(ModelCheckpointOverrideModel, self).__init__(
-            filepath, monitor=monitor, verbose=verbose,
-            save_best_only=save_best_only, save_weights_only=save_weights_only,
-            mode=mode, period=period)
-
-        self.monitor = monitor
-        self.verbose = verbose
-        self.filepath = filepath
-        self.save_best_only = save_best_only
-        self.save_weights_only = save_weights_only
-        self.period = period
-        self.epochs_since_last_save = 0
-
-        self.modelToSave = model
-
-        if mode not in ['auto', 'min', 'max']:
-            warnings.warn('ModelCheckpoint mode %s is unknown, '
-                          'fallback to auto mode.' % (mode),
-                          RuntimeWarning)
-            mode = 'auto'
-
-        if mode == 'min':
-            self.monitor_op = np.less
-            self.best = np.Inf
-        elif mode == 'max':
-            self.monitor_op = np.greater
-            self.best = -np.Inf
-        else:
-            if 'acc' in self.monitor or self.monitor.startswith('fmeasure'):
-                self.monitor_op = np.greater
-                self.best = -np.Inf
-            else:
-                self.monitor_op = np.less
-                self.best = np.Inf
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        self.epochs_since_last_save += 1
-        if self.epochs_since_last_save >= self.period:
-            self.epochs_since_last_save = 0
-            filepath = self.filepath.format(epoch=epoch, **logs)
-            if self.save_best_only:
-                current = logs.get(self.monitor)
-                if current is None:
-                    warnings.warn('Can save best model only with %s available, '
-                                  'skipping.' % (self.monitor), RuntimeWarning)
-                else:
-                    if self.monitor_op(current, self.best):
-                        if self.verbose > 0:
-                            print('Epoch %05d: %s improved from %0.5f to %0.5f,'
-                                  ' saving model to %s'
-                                  % (epoch, self.monitor, self.best,
-                                     current, filepath))
-                        self.best = current
-                        if self.save_weights_only:
-                            self.modelToSave.save_weights(filepath, overwrite=True)
-                        else:
-                            self.modelToSave.save(filepath, overwrite=True)
-                    else:
-                        if self.verbose > 0:
-                            print('Epoch %05d: %s did not improve' %
-                                  (epoch, self.monitor))
-            else:
-                if self.verbose > 0:
-                    print('Epoch %05d: saving model to %s' % (epoch, filepath))
-                if self.save_weights_only:
-                    self.modelToSave.save_weights(filepath, overwrite=True)
-                else:
-                    self.modelToSave.save(filepath, overwrite=True)
-
-def train_model(steering_model, speed_model, full_model, args, X_train, X_valid, y_train, y_valid):
+def train_model(model, args, X_train, X_valid, y_train, y_valid):
     """
     Train the model
     This trains the steering first and then the speed.
     I don't actually care all that much about the speed, so this is fine.
     """
-    earlyStopping = EarlyStopping(monitor='val_loss', min_delta=0, patience=2, verbose=1, mode='auto')
-
-    # Steering model
-    if (args.steering_model):
-        print("Loading old model for steering...")
-        old_steering_model = load_model(args.steering_model)
-        old_config = old_steering_model.get_config()[0]
-        old_first_layer_class = old_config['class_name']
-        if (old_first_layer_class == 'Input'):
-            old_layers = old_steering_model.layers[1:]
-        else:
-            old_layers = old_steering_model.layers
-        for i in range(len(old_steering_model.layers)):
-            steering_model.layers[i+1].set_weights(old_layers[i].get_weights())
-    else:
-        # Save a snapshot after each epoch
-        checkpoint_steering = ModelCheckpoint(
-            'model-steering-{epoch:03d}.h5',
-            monitor='val_loss',
-            verbose=1,
-            save_best_only=args.save_best_only,
-            mode='auto'
-        )
-
-        steering_model.compile(loss='mean_squared_error', optimizer=Adam(lr=args.learning_rate))
-
-        steering_model.fit_generator(
-            batch_generator(X_train, y_train, args.batch_size, augment_data=True),
-            args.samples_per_epoch,
-            args.nb_epoch,
-            max_q_size=1,
-            validation_data=batch_generator(X_valid, y_valid, args.batch_size),
-            nb_val_samples=len(X_valid),
-            callbacks=[checkpoint_steering, earlyStopping],
-            verbose=1
-        )
-
-    # Freeze all the layers involved in steering
-    for layer in steering_model.layers:
-        layer.trainable = False
+    earlyStopping = EarlyStopping(monitor='val_steering_output_loss', min_delta=0, patience=4, verbose=1, mode='auto')
 
     # Save a snapshot after each epoch
-    checkpoint = ModelCheckpointOverrideModel(
-        full_model,
+    checkpoint = ModelCheckpoint(
         'model-{epoch:03d}.h5',
-        monitor='val_loss',
+        monitor='val_steering_output_loss',
         verbose=1,
         save_best_only=args.save_best_only,
         mode='auto'
     )
 
-    speed_model.compile(loss='mean_squared_error', optimizer=Adam(lr=args.learning_rate))
+    # Compile the model. I don't care too much about the speed, so git it a smaller loss_weight.
+    model.compile(loss='mean_squared_error', optimizer=Adam(lr=args.learning_rate), loss_weights=[1., 0.1])
 
-    speed_model.fit_generator(
-        batch_generator(X_train, y_train, args.batch_size, augment_data=True, output_speed=True),
+    model.fit_generator(
+        batch_generator(X_train, y_train, args.batch_size, augment_data=True),
         args.samples_per_epoch,
         args.nb_epoch,
         max_q_size=1,
-        validation_data=batch_generator(X_valid, y_valid, args.batch_size, output_speed=True),
+        validation_data=batch_generator(X_valid, y_valid, args.batch_size),
         nb_val_samples=len(X_valid),
         callbacks=[checkpoint, earlyStopping],
         verbose=1
@@ -309,7 +193,6 @@ def main():
     parser.add_argument('-b', help='batch size',            dest='batch_size',        type=int,   default=400)
     parser.add_argument('-o', help='save best models only', dest='save_best_only',    type=s2b,   default='true')
     parser.add_argument('-l', help='learning rate',         dest='learning_rate',     type=float, default=1.0e-4)
-    parser.add_argument('-p', help='steering model',        dest='steering_model',    type=str)
     args = parser.parse_args()
 
     #print parameters
@@ -323,9 +206,9 @@ def main():
     #load data
     data = load_data(args)
     #build model
-    steering_model, speed_model, full_model = build_models(args)
+    model = build_model(args)
     #train model on data, it saves as model.h5
-    train_model(steering_model, speed_model, full_model, args, *data)
+    train_model(model, args, *data)
 
 
 if __name__ == '__main__':
