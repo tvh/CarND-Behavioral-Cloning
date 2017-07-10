@@ -4,7 +4,7 @@ from sklearn.model_selection import train_test_split
 from keras.models import Model, load_model, Sequential
 from keras.optimizers import Adam
 from keras.callbacks import ModelCheckpoint, EarlyStopping
-from keras.layers import Lambda, Conv2D, MaxPooling2D, Dropout, Dense, Flatten, Input, merge
+from keras.layers import Lambda, Conv2D, MaxPooling2D, Dropout, Dense, Flatten, Input
 import argparse
 import os
 import cv2
@@ -12,29 +12,39 @@ import matplotlib.image as mpimg
 
 np.random.seed(0)
 
-IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 160, 320, 3
+IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 66, 200, 3
 INPUT_SHAPE = (IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS)
 
-# This should be close to tthe maximum speed
+# This should be close to the maximum speed
 SPEED_SCALING_FACTOR = 30
 
 def load_image(image_file):
     """
     Load RGB images from a file
     """
-    return mpimg.imread(image_file)
+    return mpimg.imread(image_file.strip())
 
-def resize(image):
+def crop(image):
     """
-    Resize the image to the input shape used by the network model
+    Crop the image to the final dimension, keeping the center.
     """
-    return cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT), cv2.INTER_AREA)
+    height, width = image.shape[:2]
+    y_start = int((height - IMAGE_HEIGHT) / 2)
+    x_start = int((width - IMAGE_WIDTH) / 2)
+    return image[y_start:y_start+IMAGE_HEIGHT, x_start:x_start+IMAGE_WIDTH]
 
 def rgb2yuv(image):
     """
-    Convert the image from RGB to YUV like NVIDIA
+    Convert the image from RGB to YUV.
     """
     return cv2.cvtColor(image, cv2.COLOR_RGB2YUV)
+
+def modify_speed(old_steering_angle, new_steering_angle, speed):
+    """
+    Adjust the speed for a modified steering angle.
+    This is in a sense also a measure how close the action matches the path given byt the training set.
+    """
+    return speed*(1 - 2*(abs(new_steering_angle) - abs(old_steering_angle)))
 
 def choose_image(center, left, right, steering_angle, speed):
     """
@@ -44,18 +54,35 @@ def choose_image(center, left, right, steering_angle, speed):
     choice = np.random.choice(3)
 
     if (choice == 1):
-        new_steering_angle = steering_angle + 0.3
-        return load_image(left), steering_angle + 0.3, speed*(max(1, 1 - abs(new_steering_angle) + abs(steering_angle)))
+        new_steering_angle = steering_angle + 0.2
+        return load_image(left), new_steering_angle, modify_speed(steering_angle, new_steering_angle, speed)
     elif (choice == 2):
-        new_steering_angle = steering_angle - 0.3
-        return load_image(right), new_steering_angle, speed*(max(1, 1 - abs(new_steering_angle) + abs(steering_angle)))
+        new_steering_angle = steering_angle - 0.2
+        return load_image(right), new_steering_angle, modify_speed(steering_angle, new_steering_angle, speed)
     return load_image(center), steering_angle, speed
 
 def random_flip(image, steering_angle):
+    """
+    Randomly flip the image ans steering angle.
+    """
     choice = np.random.choice(2)
     if choice == 0:
         return cv2.flip(image,1), -steering_angle
     return image, steering_angle
+
+def random_translate(image, steering_angle, speed, range_x=60, range_y=20):
+    """
+    Randomly translate the image along the x and y axis.
+    We want data closer to the reality to dominate.
+    I use a triangle distribution, as it is bounded and is less likely to produce larger values.
+    """
+    trans_x = np.random.triangular(left=-range_x, right=range_x, mode=0)
+    trans_y = np.random.triangular(left=-range_y, right=range_y, mode=0)
+    new_steering_angle = steering_angle + trans_x * 0.002
+    trans_m = np.float32([[1, 0, trans_x], [0, 1, trans_y]])
+    height, width = image.shape[:2]
+    image = cv2.warpAffine(image, trans_m, (width, height))
+    return image, new_steering_angle, modify_speed(steering_angle, new_steering_angle, speed)
 
 def augment(center, left, right, steering_angle, speed):
     """
@@ -63,13 +90,14 @@ def augment(center, left, right, steering_angle, speed):
     """
     image, steering_angle, speed = choose_image(center, left, right, steering_angle, speed)
     image, steering_angle = random_flip(image, steering_angle)
+    image, steering_angle, speed = random_translate(image, steering_angle, speed)
     return image, steering_angle, speed
 
 def preprocess(image):
     """
     Combine all preprocess functions into one
     """
-#    image = resize(image)
+    image = crop(image)
     image = rgb2yuv(image)
     return image
 
@@ -98,17 +126,18 @@ def batch_generator(image_paths, all_outputs, batch_size, augment_data=False):
         for index in np.random.permutation(image_paths.shape[0]):
             center, left, right = image_paths[index]
             steering_angle, speed = all_outputs[index]
-            if (augment_data):
-                image, steering_angle, speed = augment(center, left, right, steering_angle, speed)
-            else:
-                image = load_image(center)
-            # add the image and steering angle to the batch
-            images[i] = preprocess(image)
-            steering_outputs[i] = steering_angle
-            speed_outputs[i] = speed/SPEED_SCALING_FACTOR
-            i += 1
-            if i == batch_size:
-                break
+            # Only yield cases for going straight about 20% of the time. This should combat the bias
+            if (abs(steering_angle) > 0.05) or (np.random.rand() < 0.2):
+                if (augment_data):
+                    image, steering_angle, speed = augment(center, left, right, steering_angle, speed)
+                else:
+                    image = load_image(center)
+                images[i] = preprocess(image)
+                steering_outputs[i] = steering_angle
+                speed_outputs[i] = speed/SPEED_SCALING_FACTOR
+                i += 1
+                if i == batch_size:
+                    break
         yield images, [steering_outputs, speed_outputs]
 
 def build_model(args):
@@ -119,7 +148,6 @@ def build_model(args):
     x = Lambda(lambda x: x/127.5-1.0, input_shape=INPUT_SHAPE)(inputs)
     x = Conv2D(24, 5, 5, activation='elu', subsample=(2, 2))(x)
     x = Conv2D(36, 5, 5, activation='elu', subsample=(2, 2))(x)
-    x = MaxPooling2D(pool_size=(2, 2))(x)
     x = Conv2D(48, 5, 5, activation='elu', subsample=(2, 2))(x)
     x = Conv2D(64, 3, 3, activation='elu')(x)
     x = Conv2D(64, 3, 3, activation='elu')(x)
@@ -130,7 +158,7 @@ def build_model(args):
     x1 = Dense(10, activation='elu', name='steering_3')(x1)
     steering_output = Dense(1, name='steering_output')(x1)
 
-    x2 = Dense(50, activation='elu', name='speed_1')(x)
+    x2 = Dense(30, activation='elu', name='speed_1')(x)
     x2 = Dense(10, activation='elu', name='speed_2')(x2)
     speed_output = Dense(1, name='speed_output')(x2)
 
