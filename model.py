@@ -1,9 +1,9 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from keras.models import Model, load_model, Sequential
+from keras.models import Model, load_model
 from keras.optimizers import Adam
-from keras.callbacks import ModelCheckpoint, EarlyStopping
+from keras.callbacks import ModelCheckpoint, EarlyStopping, TensorBoard
 from keras.layers import Lambda, Conv2D, MaxPooling2D, Dropout, Dense, Flatten, Input
 import argparse
 import os
@@ -42,9 +42,9 @@ def rgb2yuv(image):
 def modify_speed(old_steering_angle, new_steering_angle, speed):
     """
     Adjust the speed for a modified steering angle.
-    This is in a sense also a measure how close the action matches the path given byt the training set.
+    This is in a sense also a measure how close the action matches the path given by the training set.
     """
-    return speed*(1 - 2*(abs(new_steering_angle) - abs(old_steering_angle)))
+    return speed*(1 - 4*((new_steering_angle - old_steering_angle)**2))
 
 def choose_image(center, left, right, steering_angle, speed):
     """
@@ -126,18 +126,16 @@ def batch_generator(image_paths, all_outputs, batch_size, augment_data=False):
         for index in np.random.permutation(image_paths.shape[0]):
             center, left, right = image_paths[index]
             steering_angle, speed = all_outputs[index]
-            # Only yield cases for going straight about 20% of the time. This should combat the bias
-            if (abs(steering_angle) > 0.05) or (np.random.rand() < 0.2):
-                if (augment_data):
-                    image, steering_angle, speed = augment(center, left, right, steering_angle, speed)
-                else:
-                    image = load_image(center)
-                images[i] = preprocess(image)
-                steering_outputs[i] = steering_angle
-                speed_outputs[i] = speed/SPEED_SCALING_FACTOR
-                i += 1
-                if i == batch_size:
-                    break
+            if (augment_data):
+                image, steering_angle, speed = augment(center, left, right, steering_angle, speed)
+            else:
+                image = load_image(center)
+            images[i] = preprocess(image)
+            steering_outputs[i] = steering_angle
+            speed_outputs[i] = speed/SPEED_SCALING_FACTOR
+            i += 1
+            if i == batch_size:
+                break
         yield images, [steering_outputs, speed_outputs]
 
 def build_model(args):
@@ -146,11 +144,11 @@ def build_model(args):
     """
     inputs = Input(shape=INPUT_SHAPE)
     x = Lambda(lambda x: x/127.5-1.0, input_shape=INPUT_SHAPE)(inputs)
-    x = Conv2D(24, 5, 5, activation='elu', subsample=(2, 2))(x)
-    x = Conv2D(36, 5, 5, activation='elu', subsample=(2, 2))(x)
-    x = Conv2D(48, 5, 5, activation='elu', subsample=(2, 2))(x)
-    x = Conv2D(64, 3, 3, activation='elu')(x)
-    x = Conv2D(64, 3, 3, activation='elu')(x)
+    x = Conv2D(24, (5, 5), activation='elu', strides=(2, 2))(x)
+    x = Conv2D(36, (5, 5), activation='elu', strides=(2, 2))(x)
+    x = Conv2D(48, (5, 5), activation='elu', strides=(2, 2))(x)
+    x = Conv2D(64, (3, 3), activation='elu')(x)
+    x = Conv2D(64, (3, 3), activation='elu')(x)
     x = Flatten()(x)
 
     x1 = Dense(100, activation='elu', name='steering_1')(x)
@@ -170,8 +168,8 @@ def build_model(args):
 def train_model(model, args, X_train, X_valid, y_train, y_valid):
     """
     Train the model
-    This trains the steering first and then the speed.
-    I don't actually care all that much about the speed, so this is fine.
+    This trains the steering with a far higher weight than the speed.
+    I don't care much about the speed, so this should be fine.
     """
     earlyStopping = EarlyStopping(monitor='val_steering_output_loss', min_delta=0, patience=4, verbose=1, mode='auto')
 
@@ -184,17 +182,26 @@ def train_model(model, args, X_train, X_valid, y_train, y_valid):
         mode='auto'
     )
 
+    tensorBoard = TensorBoard(
+        log_dir='./logs',
+        histogram_freq=1,
+        batch_size=32,
+        write_graph=True,
+        write_grads=True,
+        write_images=True)
+
     # Compile the model. I don't care too much about the speed, so git it a smaller loss_weight.
     model.compile(loss='mean_squared_error', optimizer=Adam(lr=args.learning_rate), loss_weights=[1., 0.1])
 
     model.fit_generator(
-        batch_generator(X_train, y_train, args.batch_size, augment_data=True),
-        args.samples_per_epoch,
-        args.nb_epoch,
-        max_q_size=1,
+        generator=batch_generator(X_train, y_train, args.batch_size, augment_data=True),
+        steps_per_epoch=int(args.samples_per_epoch/args.batch_size),
+        epochs=args.nb_epoch,
+        max_queue_size=10,
+        workers=1,
         validation_data=batch_generator(X_valid, y_valid, args.batch_size),
-        nb_val_samples=len(X_valid),
-        callbacks=[checkpoint, earlyStopping],
+        validation_steps=len(X_valid)/args.batch_size,
+        callbacks=[checkpoint, earlyStopping, tensorBoard],
         verbose=1
     )
 
