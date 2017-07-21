@@ -9,6 +9,8 @@ import argparse
 import os
 import cv2
 import matplotlib.image as mpimg
+import threading
+
 
 np.random.seed(0)
 
@@ -114,19 +116,44 @@ def load_data(args):
 
     return X_train, X_valid, y_train, y_valid
 
-def batch_generator(image_paths, all_outputs, batch_size, augment_data=False):
+class BatchGenerator():
     """
     Generate batches for training/validation
     """
-    images = np.empty([batch_size, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS])
-    steering_outputs = np.empty([batch_size, 1])
-    speed_outputs = np.empty([batch_size, 1])
-    while True:
+    def __init__(self, image_paths, all_outputs, batch_size, augment_data=False):
+        self.image_paths = image_paths
+        self.data_length = image_paths.shape[0]
+        self.all_outputs = all_outputs
+        self.batch_size = batch_size
+        self.augment_data = augment_data
+        self.lock = threading.Lock()
+        self.image_permutation = np.random.permutation(self.data_length)
+        self.index = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
         i = 0
-        for index in np.random.permutation(image_paths.shape[0]):
-            center, left, right = image_paths[index]
-            steering_angle, speed = all_outputs[index]
-            if (augment_data):
+        image_permutation = []
+        # Collect the images to use synchronously (this part is cheap)
+        with self.lock:
+            while i < self.batch_size:
+                image_permutation.append(self.image_permutation[self.index])
+                self.index += 1
+                if (self.index >= self.data_length):
+                    self.image_permutation = np.random.permutation(self.data_length)
+                    self.index = 0
+                i += 1
+        # Generate the data (this is expensive)
+        images = np.empty([self.batch_size, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS])
+        steering_outputs = np.empty([self.batch_size, 1])
+        speed_outputs = np.empty([self.batch_size, 1])
+        i = 0
+        for index in image_permutation:
+            center, left, right = self.image_paths[index]
+            steering_angle, speed = self.all_outputs[index]
+            if (self.augment_data):
                 image, steering_angle, speed = augment(center, left, right, steering_angle, speed)
             else:
                 image = load_image(center)
@@ -134,9 +161,7 @@ def batch_generator(image_paths, all_outputs, batch_size, augment_data=False):
             steering_outputs[i] = steering_angle
             speed_outputs[i] = speed/SPEED_SCALING_FACTOR
             i += 1
-            if i == batch_size:
-                break
-        yield images, [steering_outputs, speed_outputs]
+        return images, [steering_outputs, speed_outputs]
 
 def build_model(args):
     """
@@ -194,12 +219,12 @@ def train_model(model, args, X_train, X_valid, y_train, y_valid):
     model.compile(loss='mean_squared_error', optimizer=Adam(lr=args.learning_rate), loss_weights=[1., 0.1])
 
     model.fit_generator(
-        generator=batch_generator(X_train, y_train, args.batch_size, augment_data=True),
+        generator=BatchGenerator(X_train, y_train, args.batch_size, augment_data=True),
         steps_per_epoch=int(args.samples_per_epoch/args.batch_size),
         epochs=args.nb_epoch,
-        max_queue_size=10,
-        workers=1,
-        validation_data=batch_generator(X_valid, y_valid, args.batch_size),
+        max_queue_size=32,
+        workers=16,
+        validation_data=BatchGenerator(X_valid, y_valid, args.batch_size),
         validation_steps=len(X_valid)/args.batch_size,
         callbacks=[checkpoint, earlyStopping, tensorBoard],
         verbose=1
