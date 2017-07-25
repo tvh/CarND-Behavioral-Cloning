@@ -46,9 +46,9 @@ def modify_speed(old_steering_angle, new_steering_angle, speed):
     Adjust the speed for a modified steering angle.
     This is in a sense also a measure how close the action matches the path given by the training set.
     """
-    return speed*(1 - 4*((new_steering_angle - old_steering_angle)**2))
+    return speed*(1 - (new_steering_angle - old_steering_angle)**2)
 
-def choose_image(center, left, right, steering_angle, speed):
+def choose_image(center, left, right):
     """
     Randomly choose an image from the center, left or right, and adjust
     the steering angle.
@@ -56,23 +56,21 @@ def choose_image(center, left, right, steering_angle, speed):
     choice = np.random.choice(3)
 
     if (choice == 1):
-        new_steering_angle = steering_angle + 0.2
-        return load_image(left), new_steering_angle, modify_speed(steering_angle, new_steering_angle, speed)
+        return load_image(left), 1
     elif (choice == 2):
-        new_steering_angle = steering_angle - 0.2
-        return load_image(right), new_steering_angle, modify_speed(steering_angle, new_steering_angle, speed)
-    return load_image(center), steering_angle, speed
+        return load_image(right), -1
+    return load_image(center), 0
 
-def random_flip(image, steering_angle):
+def random_flip(image):
     """
     Randomly flip the image ans steering angle.
     """
     choice = np.random.choice(2)
     if choice == 0:
-        return cv2.flip(image,1), -steering_angle
-    return image, steering_angle
+        return cv2.flip(image,1), -1
+    return image, 1
 
-def random_translate(image, steering_angle, speed, range_x=60, range_y=20):
+def random_translate(image, range_x=60, range_y=20):
     """
     Randomly translate the image along the x and y axis.
     We want data closer to the reality to dominate.
@@ -80,20 +78,23 @@ def random_translate(image, steering_angle, speed, range_x=60, range_y=20):
     """
     trans_x = np.random.triangular(left=-range_x, right=range_x, mode=0)
     trans_y = np.random.triangular(left=-range_y, right=range_y, mode=0)
-    new_steering_angle = steering_angle + trans_x * 0.002
+    steering_angle_diff = trans_x * 0.01
     trans_m = np.float32([[1, 0, trans_x], [0, 1, trans_y]])
     height, width = image.shape[:2]
     image = cv2.warpAffine(image, trans_m, (width, height))
-    return image, new_steering_angle, modify_speed(steering_angle, new_steering_angle, speed)
+    return image, steering_angle_diff
 
 def augment(center, left, right, steering_angle, speed):
     """
     Generate an augmented image with associated steering commands
     """
-    image, steering_angle, speed = choose_image(center, left, right, steering_angle, speed)
-    image, steering_angle = random_flip(image, steering_angle)
-    image, steering_angle, speed = random_translate(image, steering_angle, speed)
-    return image, steering_angle, speed
+    image, steering_angle_diff1 = choose_image(center, left, right)
+    image, steering_angle_diff2 = random_translate(image)
+    image, steering_angle_signum = random_flip(image)
+    steering_angle_diff = steering_angle_diff1 + steering_angle_diff2
+    new_steering_angle = steering_angle_signum * (steering_angle + ((steering_angle_diff+steering_angle_diff**3)*0.1))
+    speed = modify_speed(steering_angle, new_steering_angle, speed)
+    return image, new_steering_angle, speed
 
 def preprocess(image):
     """
@@ -196,7 +197,7 @@ def train_model(model, args, X_train, X_valid, y_train, y_valid):
     This trains the steering with a far higher weight than the speed.
     I don't care much about the speed, so this should be fine.
     """
-    earlyStopping = EarlyStopping(monitor='val_steering_output_loss', min_delta=0, patience=4, verbose=1, mode='auto')
+    earlyStopping = EarlyStopping(monitor='val_steering_output_loss', min_delta=0, patience=args.patience, verbose=1, mode='auto')
 
     # Save a snapshot after each epoch
     checkpoint = ModelCheckpoint(
@@ -210,10 +211,7 @@ def train_model(model, args, X_train, X_valid, y_train, y_valid):
     tensorBoard = TensorBoard(
         log_dir='./logs',
         histogram_freq=1,
-        batch_size=32,
-        write_graph=True,
-        write_grads=True,
-        write_images=True)
+        batch_size=32)
 
     # Compile the model. I don't care too much about the speed, so git it a smaller loss_weight.
     model.compile(loss='mean_squared_error', optimizer=Adam(lr=args.learning_rate), loss_weights=[1., 0.1])
@@ -222,7 +220,7 @@ def train_model(model, args, X_train, X_valid, y_train, y_valid):
         generator=BatchGenerator(X_train, y_train, args.batch_size, augment_data=True),
         steps_per_epoch=int(args.samples_per_epoch/args.batch_size),
         epochs=args.nb_epoch,
-        max_queue_size=32,
+        max_queue_size=128,
         workers=16,
         validation_data=BatchGenerator(X_valid, y_valid, args.batch_size),
         validation_steps=len(X_valid)/args.batch_size,
@@ -248,11 +246,12 @@ def main():
     parser = argparse.ArgumentParser(description='Behavioral Cloning Training Program')
     parser.add_argument('-d', help='data directory',        dest='data_dir',          type=str)
     parser.add_argument('-t', help='test size fraction',    dest='test_size',         type=float, default=0.2)
-    parser.add_argument('-n', help='number of epochs',      dest='nb_epoch',          type=int,   default=20)
-    parser.add_argument('-s', help='samples per epoch',     dest='samples_per_epoch', type=int,   default=20000)
-    parser.add_argument('-b', help='batch size',            dest='batch_size',        type=int,   default=400)
+    parser.add_argument('-n', help='number of epochs',      dest='nb_epoch',          type=int,   default=40)
+    parser.add_argument('-s', help='samples per epoch',     dest='samples_per_epoch', type=int,   default=40000)
+    parser.add_argument('-b', help='batch size',            dest='batch_size',        type=int,   default=100)
     parser.add_argument('-o', help='save best models only', dest='save_best_only',    type=s2b,   default='true')
     parser.add_argument('-l', help='learning rate',         dest='learning_rate',     type=float, default=1.0e-4)
+    parser.add_argument('-p', help='patience',              dest='patience',          type=int,   default=4)
     args = parser.parse_args()
 
     #print parameters
@@ -269,7 +268,6 @@ def main():
     model = build_model(args)
     #train model on data, it saves as model.h5
     train_model(model, args, *data)
-
 
 if __name__ == '__main__':
     main()
