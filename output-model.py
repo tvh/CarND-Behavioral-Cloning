@@ -1,6 +1,6 @@
 import argparse
 
-from keras.utils.visualize_util import plot
+from keras.utils import plot_model
 from keras.models import load_model
 
 if __name__ == '__main__':
@@ -20,4 +20,4 @@ if __name__ == '__main__':
     model = load_model(args.model)
     model.summary()
 
-    plot(model, to_file=args.image, show_shapes=True)
+    plot_model(model, to_file=args.image, show_shapes=True)
