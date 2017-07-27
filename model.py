@@ -179,7 +179,7 @@ def build_model(args):
     x = Flatten()(x)
 
     x1 = Dense(100, activation='elu', name='steering_1')(x)
-    x = Dropout(0.5)(x)
+    x1 = Dropout(0.5)(x1)
     x1 = Dense(50, activation='elu', name='steering_2')(x1)
     x1 = Dense(10, activation='elu', name='steering_3')(x1)
     steering_output = Dense(1, name='steering_output')(x1)
