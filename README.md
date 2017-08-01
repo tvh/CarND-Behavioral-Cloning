@@ -39,7 +39,7 @@ To normalize the input I use a Lambda layer.
 
 To combat overfitting I introduced 2 dropout layers.
 I also decided to include an output for speed with it's own set of fully connected layers.
-![model visualization](model.svg)
+![model visualization](model.png)
 
 ### Training
 
@@ -109,12 +109,12 @@ I found that validation loss was not a good measure of model performance.
 While all models after a certain epoch (usually <= 15) were able to drive around track 1,
 they started to oscillate around the lane center.
 When you look at the curve for validation loss, you can actuelly tell when ecactly this happens:
-![val steering output loss](writeup_images/val_steering_output_loss.svg)
+![val steering output loss](writeup_images/val_steering_output_loss.png)
 At epoch 17 the car drives very smoothly.
 After that the validation loss goes up for 1 iteration and from then on the model performs poorly.
 
 With the `speed_output`, the trend is much less clear. This is expected as I assigned it a very low weight.
-![val speed output loss](writeup_images/val_speed_output_loss.svg)
+![val speed output loss](writeup_images/val_speed_output_loss.png)
 
 ### Possible areas of improvement
 The model as it is now performs fairly well on little data.
