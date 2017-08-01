@@ -15,7 +15,7 @@ My project includes the following files:
 * model.py containing the script to create and train the model
 * drive.py for driving the car in autonomous mode
 * model.h5 containing a trained convolution neural network
-* writeup_report.md summarizing the results
+* README.md summarizing the results
 * lake-race.mp4 showing performance on the first track
 * jungle.mp4 showing performance on the jungle track (graphics set to fantastic)
 * jungle-fastest-quality.mp4 showing performance on the jungle track (graphics set to fastest)
@@ -58,6 +58,7 @@ The third time I collected 34946 samples of which about 2/3 were driving on trac
 Again I used the mouse for steering.
 I also included some `recovery` samples for track 1, but found them to help little in performance.
 For track 2 however, they helped a lot. Here is an example of where they helped:
+
 ![track 2 hard](writeup_images/track2_bad.jpg)
 
 #### Data Augmentation
